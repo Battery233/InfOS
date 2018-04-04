@@ -36,18 +36,18 @@ static inline unsigned int octal2ui(const char *data)
   // Starting at i = 1, with a factor of one.
   int i = 1, factor = 1;
   while (i < len) {
-  // Extract the current character we're working on (backwards from the end).
-  char ch = data[len - i];
+    // Extract the current character we're working on (backwards from the end).
+    char ch = data[len - i];
 
-  // Add the value of the character, multipled by the factor, to
-  // the working value.
-  value += factor * (ch - '0');
+    // Add the value of the character, multipled by the factor, to
+    // the working value.
+    value += factor * (ch - '0');
 
-  // Increment the factor by multiplying it by eight.
-  factor *= 8;
+    // Increment the factor by multiplying it by eight.
+    factor *= 8;
 
-  // Increment the current character position.
-  i++;
+    // Increment the current character position.
+    i++;
   }
 
   // Return the current working value.
@@ -65,23 +65,23 @@ namespace tarfs {
 
   struct posix_header
   {                              /* byte offset */
-  char name[100];               /*   0 */
-  char mode[8];                 /* 100 */
-  char uid[8];                  /* 108 */
-  char gid[8];                  /* 116 */
-  char size[12];                /* 124 */
-  char mtime[12];               /* 136 */
-  char chksum[8];               /* 148 */
-  char typeflag;                /* 156 */
-  char linkname[100];           /* 157 */
-  char magic[6];                /* 257 */
-  char version[2];              /* 263 */
-  char uname[32];               /* 265 */
-  char gname[32];               /* 297 */
-  char devmajor[8];             /* 329 */
-  char devminor[8];             /* 337 */
-  char prefix[155];             /* 345 */
-  /* 500 */
+    char name[100];               /*   0 */
+    char mode[8];                 /* 100 */
+    char uid[8];                  /* 108 */
+    char gid[8];                  /* 116 */
+    char size[12];                /* 124 */
+    char mtime[12];               /* 136 */
+    char chksum[8];               /* 148 */
+    char typeflag;                /* 156 */
+    char linkname[100];           /* 157 */
+    char magic[6];                /* 257 */
+    char version[2];              /* 263 */
+    char uname[32];               /* 265 */
+    char gname[32];               /* 297 */
+    char devmajor[8];             /* 329 */
+    char devminor[8];             /* 337 */
+    char prefix[155];             /* 345 */
+    /* 500 */
   } __packed;
 }
 
@@ -101,7 +101,7 @@ int TarFSFile::pread(void* buffer, size_t size, off_t off)
   int end_block_num = this->size()-off<size?this->size()/512:(off+size)/512;
   size_t size_to_read = this->size()-off<size?this->size()-off:size;
   if(!(off+size)%512)
-      end_block_num++;
+  end_block_num++;
   char* read_blocks_needed = new char[(end_block_num-start_block_num+1)*512];
   _owner.block_device().read_blocks(read_blocks_needed, _file_start_block+start_block_num, end_block_num-start_block_num+1);
   int j = 0;
@@ -115,18 +115,86 @@ int TarFSFile::pread(void* buffer, size_t size, off_t off)
   return size_to_read;
 }
 
+bool equals(String& str1, String& str2){
+  if(str1.length() != str2.length())
+  return false;
+
+  for(unsigned int i = 0;i<str1.length();i++){
+    if(str1[i]==str2[i]){
+      continue;
+    }
+    else
+    return false;
+  }
+  return true;
+}
+
 /**
 * Reads all the file headers in the TAR file, and builds an in-memory
 * representation.
 * @return Returns the root TarFSNode that corresponds to the TAR file structure.
 */
-TarFSNode* TarFS::build_tree()
-{
+TarFSNode* TarFS::build_tree(){
   // Create the root node.
   TarFSNode *root = new TarFSNode(NULL, "", *this);
+  size_t current_block = 0;
+  TarFSNode *p = root;
 
-  // You must read the TAR file, and build a tree of TarFSNodes that represents each file present in the archive
-
+  while(current_block < block_device().block_count()) {
+    struct posix_header *buffer = (struct posix_header *) new char[block_device().block_size()];
+    block_device().read_blocks(buffer,current_block,1);
+    //two blocks of 0 at the end of file?
+    if(is_zero_block((uint8_t *)buffer)){
+      if(current_block<block_device().block_count()-1){
+        struct posix_header *buffer_next = (struct posix_header *) new char[block_device().block_size()];
+        block_device().read_blocks(buffer_next,current_block+1,1);
+        if(is_zero_block((uint8_t *)buffer_next)){
+          delete buffer_next;
+          delete buffer;
+          break;
+        }
+        delete buffer_next;
+      }
+    }
+    syslog.messagef(LogLevel::DEBUG, "file size is:%d",octal2ui(buffer->size));
+    int file_blocks_numbers = octal2ui(buffer->size)%512?octal2ui(buffer->size)/512+1:octal2ui(buffer->size)/512;
+    List<String> file_folders = String(buffer->name).split('/',1);
+    int length = file_folders.count();
+    syslog.messagef(LogLevel::DEBUG, "list size is:%d",length);
+    String node_name = "";
+    if(length){
+      node_name = file_folders.at(file_folders.count()-1);
+    }else{
+      //root found
+      node_name = "/";
+    }
+    if(file_folders.count()!=1&&file_folders.count()){
+      String name_wanted = (String)p->name();
+      String upper_dic_name = file_folders.at(file_folders.count()-2);
+      for(unsigned int i = 0; i< file_folders.count();i++){
+        if(!equals(name_wanted,upper_dic_name)){
+          p = (TarFSNode*)p->parent();
+          name_wanted = (String)p->name();
+        }
+        else{
+          break;
+        }
+      }
+    }else if(file_folders.count()){
+      p = root;
+    }
+    // make node
+		TarFSNode *node = new TarFSNode(p, node_name, *this);
+    node->size(octal2ui(buffer->size));
+		node->set_block_offset(current_block);
+		p->add_child(node_name, node);
+		if (String(buffer->name).c_str()[String(buffer->name).length() - 1] == '/') {
+      syslog.messagef(LogLevel::DEBUG, ">>>>>>set");
+			p = node;
+		}
+    delete buffer;
+    current_block+= file_blocks_numbers+1;
+  }
   return root;
 }
 
@@ -148,7 +216,7 @@ PFSNode *TarFS::mount()
 {
   // If the root node has not been generated, then build it.
   if (_root_node == NULL) {
-  _root_node = build_tree();
+    _root_node = build_tree();
   }
 
   // Return the root node.
@@ -227,12 +295,12 @@ void TarFSFile::seek(off_t offset, SeekType type)
   // to the given offset (subject to the file size).  There should
   // probably be a way to return an error if the offset was out of bounds.
   if (type == File::SeekAbsolute) {
-  _cur_pos = offset;
+    _cur_pos = offset;
   } else if (type == File::SeekRelative) {
-  _cur_pos += offset;
+    _cur_pos += offset;
   }
   if (_cur_pos >= size()) {
-  _cur_pos = size() - 1;
+    _cur_pos = size() - 1;
   }
 }
 
@@ -252,7 +320,7 @@ File* TarFSNode::open()
 {
   // This is only a file if it has been associated with a block offset.
   if (!_has_block_offset) {
-  return NULL;
+    return NULL;
   }
 
   // Create a new file object, with a header from this node's block offset.
@@ -280,7 +348,7 @@ PFSNode* TarFSNode::get_child(const String& name)
   // Try to find the given child node in the children map, and return
   // NULL if it wasn't found.
   if (!_children.try_get_value(name.get_hash(), child)) {
-  return NULL;
+    return NULL;
   }
 
   return child;
@@ -327,8 +395,8 @@ TarFSDirectory::TarFSDirectory(TarFSNode& node) : _entries(NULL), _nr_entries(0)
 
   int i = 0;
   for (const auto& child : node.children()) {
-  _entries[i].name = child.value->name();
-  _entries[i++].size = child.value->size();
+    _entries[i].name = child.value->name();
+    _entries[i++].size = child.value->size();
   }
 }
 
@@ -340,10 +408,10 @@ TarFSDirectory::~TarFSDirectory()
 bool TarFSDirectory::read_entry(infos::fs::DirectoryEntry& entry)
 {
   if (_cur_entry < _nr_entries) {
-  entry = _entries[_cur_entry++];
-  return true;
+    entry = _entries[_cur_entry++];
+    return true;
   } else {
-  return false;
+    return false;
   }
 }
 
