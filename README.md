@@ -1,4 +1,4 @@
-## Welcome
+## InfOS
 
 Implementation of important functions in an existing research operating system called InfOS including a process scheduler, a page-based memory allocator and a device driver for a real-time clock.
 
